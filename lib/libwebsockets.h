@@ -646,6 +646,8 @@ struct lws_esp32 {
 	char access_pw[16];
 	char hostname[32];
 	char mac[20];
+	char le_dns[64];
+	char le_email[64];
 	mdns_server_t *mdns;
        	char region;
        	char inet;
@@ -910,6 +912,44 @@ enum lws_meta_commands {
 struct lws_ssl_info {
 	int where;
 	int ret;
+};
+
+enum lws_cert_update_state {
+	LWS_CUS_IDLE,
+	LWS_CUS_STARTING,
+	LWS_CUS_SUCCESS,
+	LWS_CUS_FAILED,
+
+	LWS_CUS_CREATE_KEYS,
+	LWS_CUS_REG,
+	LWS_CUS_AUTH,
+	LWS_CUS_CHALLENGE,
+	LWS_CUS_CREATE_REQ,
+	LWS_CUS_REQ,
+	LWS_CUS_ISSUE,
+	LWS_CUS_CERT_SENT,
+};
+
+enum {
+	LWS_TLS_REQ_ELEMENT_COUNTRY,
+	LWS_TLS_REQ_ELEMENT_STATE,
+	LWS_TLS_REQ_ELEMENT_LOCALITY,
+	LWS_TLS_REQ_ELEMENT_ORGANIZATION,
+	LWS_TLS_REQ_ELEMENT_COMMON_NAME,
+	LWS_TLS_REQ_ELEMENT_EMAIL,
+
+	LWS_TLS_REQ_ELEMENT_COUNT,
+	LWS_TLS_SET_DIR_URL = LWS_TLS_REQ_ELEMENT_COUNT,
+	LWS_TLS_SET_AUTH_PATH,
+	LWS_TLS_SET_CERT_PATH,
+	LWS_TLS_SET_KEY_PATH,
+
+	LWS_TLS_TOTAL_COUNT
+};
+
+struct lws_acme_cert_aging_args {
+	struct lws_vhost *vh;
+	const char *element_overrides[LWS_TLS_TOTAL_COUNT]; /* NULL = use pvo */
 };
 
 /*
@@ -1428,8 +1468,19 @@ enum lws_callback_reasons {
 	/**< When a vhost TLS cert has its expiry checked, this callback
 	 * is broadcast to every protocol of every vhost in case the
 	 * protocol wants to take some action with this information.
-	 * \p in is the lws_vhost and \p len is the number of days left
-	 * before it expires, as a (ssize_t) */
+	 * \p in is a pointer to a struct lws_acme_cert_aging_args,
+	 * and \p len is the number of days left before it expires, as
+	 * a (ssize_t).  In the struct lws_acme_cert_aging_args, vh
+	 * points to the vhost the cert aging information applies to,
+	 * and element_overrides[] is an optional way to update information
+	 * from the pvos... NULL in an index means use the information from
+	 * from the pvo for the cert renewal, non-NULL in the array index
+	 * means use that pointer instead for the index. */
+	LWS_CALLBACK_VHOST_CERT_UPDATE				= 73,
+	/**< When a vhost TLS cert is being updated, progress is
+	 * reported to the vhost in question here, including completion
+	 * and failure.  in points to optional JSON, and len represents the
+	 * connection state using enum lws_cert_update_state */
 
 	/****** add new things just above ---^ ******/
 
@@ -4804,9 +4855,31 @@ lws_callback_all_protocol_vhost_args(struct lws_vhost *vh,
  * - Which:  connections using this protocol on same VHOST as wsi ONLY
  * - When:   now
  * - What:   reason
+ *
+ * This is deprecated since v2.5, use lws_callback_vhost_protocols_vhost()
+ * which takes the pointer to the vhost directly without using or needing the
+ * wsi.
  */
 LWS_VISIBLE LWS_EXTERN int
-lws_callback_vhost_protocols(struct lws *wsi, int reason, void *in, int len);
+lws_callback_vhost_protocols(struct lws *wsi, int reason, void *in, int len)
+LWS_WARN_DEPRECATED;
+
+/**
+ * lws_callback_vhost_protocols_vhost() - Callback all protocols enabled on a vhost
+ *					with the given reason
+ *
+ * \param vh:		vhost that will get callbacks
+ * \param reason:	Callback reason index
+ * \param in:		in argument to callback
+ * \param len:		len argument to callback
+ *
+ * - Which:  connections using this protocol on same VHOST as wsi ONLY
+ * - When:   now
+ * - What:   reason
+ */
+LWS_VISIBLE LWS_EXTERN int
+lws_callback_vhost_protocols_vhost(struct lws_vhost *vh, int reason, void *in,
+				   size_t len);
 
 LWS_VISIBLE LWS_EXTERN int
 lws_callback_http_dummy(struct lws *wsi, enum lws_callback_reasons reason,
@@ -5612,23 +5685,6 @@ lws_tls_vhost_cert_info(struct lws_vhost *vhost, enum lws_tls_cert_info type,
 LWS_VISIBLE LWS_EXTERN int
 lws_tls_acme_sni_cert_create(struct lws_vhost *vhost, const char *san_a,
 			     const char *san_b);
-
-enum {
-	LWS_TLS_REQ_ELEMENT_COUNTRY,
-	LWS_TLS_REQ_ELEMENT_STATE,
-	LWS_TLS_REQ_ELEMENT_LOCALITY,
-	LWS_TLS_REQ_ELEMENT_ORGANIZATION,
-	LWS_TLS_REQ_ELEMENT_COMMON_NAME,
-	LWS_TLS_REQ_ELEMENT_EMAIL,
-
-	LWS_TLS_REQ_ELEMENT_COUNT,
-	LWS_TLS_SET_DIR_URL = LWS_TLS_REQ_ELEMENT_COUNT,
-	LWS_TLS_SET_AUTH_PATH,
-	LWS_TLS_SET_CERT_PATH,
-	LWS_TLS_SET_KEY_PATH,
-
-	LWS_TLS_TOTAL_COUNT
-};
 
 /**
  * lws_tls_acme_sni_csr_create() - creates a CSR and related private key PEM
@@ -6626,31 +6682,31 @@ struct lejp_ctx {
 	/* arrays */
 
 	struct _lejp_stack st[LEJP_MAX_DEPTH];
-	unsigned short i[LEJP_MAX_INDEX_DEPTH]; /* index array */
-	unsigned short wild[LEJP_MAX_INDEX_DEPTH]; /* index array */
+	uint16_t i[LEJP_MAX_INDEX_DEPTH]; /* index array */
+	uint16_t wild[LEJP_MAX_INDEX_DEPTH]; /* index array */
 	char path[LEJP_MAX_PATH];
 	char buf[LEJP_STRING_CHUNK];
 
 	/* int */
 
-	unsigned int line;
+	uint32_t line;
 
 	/* short */
 
-	unsigned short uni;
+	uint16_t uni;
 
 	/* char */
 
-	unsigned char npos;
-	unsigned char dcount;
-	unsigned char f;
-	unsigned char sp; /* stack head */
-	unsigned char ipos; /* index stack depth */
-	unsigned char ppos;
-	unsigned char count_paths;
-	unsigned char path_match;
-	unsigned char path_match_len;
-	unsigned char wildcount;
+	uint8_t npos;
+	uint8_t dcount;
+	uint8_t f;
+	uint8_t sp; /* stack head */
+	uint8_t ipos; /* index stack depth */
+	uint8_t ppos;
+	uint8_t count_paths;
+	uint8_t path_match;
+	uint8_t path_match_len;
+	uint8_t wildcount;
 };
 
 LWS_VISIBLE LWS_EXTERN void

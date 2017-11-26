@@ -225,6 +225,7 @@ lws_tls_check_cert_lifetime(struct lws_vhost *v)
 {
 	union lws_tls_cert_info_results ir;
 	time_t now = (time_t)lws_now_secs(), life = 0;
+	struct lws_acme_cert_aging_args caa;
 	int n;
 
 	if (v->ssl_ctx && !v->skipped_certs) {
@@ -242,7 +243,9 @@ lws_tls_check_cert_lifetime(struct lws_vhost *v)
 	} else
 		lwsl_notice("   vhost %s: no cert\n", v->name);
 
-	lws_broadcast(v->context, LWS_CALLBACK_VHOST_CERT_AGING, v,
+	memset(&caa, 0, sizeof(caa));
+	caa.vh = v;
+	lws_broadcast(v->context, LWS_CALLBACK_VHOST_CERT_AGING, (void *)&caa,
 		      (size_t)(ssize_t)life);
 
 	return 0;

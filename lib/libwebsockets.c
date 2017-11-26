@@ -1176,6 +1176,29 @@ lws_callback_vhost_protocols(struct lws *wsi, int reason, void *in, int len)
 	return 0;
 }
 
+LWS_VISIBLE LWS_EXTERN int
+lws_callback_vhost_protocols_vhost(struct lws_vhost *vh, int reason, void *in,
+				   size_t len)
+{
+	int n;
+	struct lws *wsi = lws_zalloc(sizeof(*wsi), "fake wsi");
+
+	wsi->context = vh->context;
+	wsi->vhost = vh;
+
+	for (n = 0; n < wsi->vhost->count_protocols; n++) {
+		wsi->protocol = &vh->protocols[n];
+		if (wsi->protocol->callback(wsi, reason, NULL, in, len)) {
+			lws_free(wsi);
+			return 1;
+		}
+	}
+
+	lws_free(wsi);
+
+	return 0;
+}
+
 LWS_VISIBLE LWS_EXTERN void
 lws_set_fops(struct lws_context *context, const struct lws_plat_file_ops *fops)
 {
